@@ -1,0 +1,9 @@
+{
+  "workflow_id": "demo",
+  "tasks": [
+    {"task_id": "extract", "dependencies": []},
+    {"task_id": "clean", "dependencies": ["extract"]},
+    {"task_id": "analyze", "dependencies": ["clean"]},
+    {"task_id": "publish", "dependencies": ["analyze"]}
+  ]
+}

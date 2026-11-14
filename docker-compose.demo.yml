@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: workflow
+      POSTGRES_USER: workflow
+      POSTGRES_PASSWORD: ${WORKFLOW_DB_PASSWORD:?set by demo script}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workflow -d workflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1::5432"
+    networks: [workflow]
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [workflow]
+    ports:
+      - "127.0.0.1::6379"
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    command: ["api", "--host", "0.0.0.0"]
+    environment: &service_env
+      WORKFLOW_DATABASE_URL: postgresql://workflow:${WORKFLOW_DB_PASSWORD}@postgres:5432/workflow
+      WORKFLOW_REDIS_URL: redis://redis:6379/0
+      WORKFLOW_API_HOST: 0.0.0.0
+      WORKFLOW_API_TOKEN: ${WORKFLOW_API_TOKEN:?set by demo script}
+      WORKFLOW_ACTIONS_MODULE: workflow_engine.demo_actions
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks: [workflow]
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    command: ["worker", "--metrics-host", "0.0.0.0"]
+    environment: *service_env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [workflow]
+    deploy:
+      replicas: 3
+  dashboard-smoke:
+    image: curlimages/curl:8.12.1
+    entrypoint: ["/bin/sh", "-c", "until curl -fsS http://api:8000/health/ready; do sleep 1; done; curl -fsS http://api:8000/dashboard/ >/dev/null"]
+    depends_on:
+      api: { condition: service_started }
+    networks: [workflow]
+    profiles: [smoke]
+
+networks:
+  workflow:
+    internal: false
+volumes:
+  pgdata:

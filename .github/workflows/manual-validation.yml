@@ -1,0 +1,79 @@
+name: Manual Chaos and Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_chaos:
+        description: Run isolated destructive recovery tests
+        type: boolean
+        default: false
+      run_benchmarks:
+        description: Run full 18-configuration benchmark matrix
+        type: boolean
+        default: false
+
+jobs:
+  chaos:
+    if: inputs.run_chaos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: scripts/run-chaos.sh
+
+  benchmarks:
+    if: inputs.run_benchmarks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: workflow
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U workflow -d workflow"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    strategy:
+      fail-fast: false
+      matrix:
+        workers: [1, 2, 4]
+        redis: [disabled, enabled]
+        workload: [linear, fan, mixed]
+    env:
+      WORKFLOW_DATABASE_URL: postgresql://workflow:workflow@localhost:5432/workflow
+      WORKFLOW_REDIS_URL: redis://localhost:6379/0
+      WORKFLOW_API_TOKEN: wf005-benchmark-only-token
+      WORKFLOW_API_HOST: 127.0.0.1
+      WORKFLOW_ACTIONS_MODULE: workflow_engine.demo_actions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Start API
+        run: python -m workflow_engine api > /tmp/wf-api.log 2>&1 &
+      - name: Wait for API and execute one configuration
+        env:
+          WORKER_COUNT: ${{ matrix.workers }}
+          REDIS_MODE: ${{ matrix.redis }}
+          WORKLOAD: ${{ matrix.workload }}
+        run: |
+          for n in $(seq 1 60); do curl -fsS http://127.0.0.1:8000/health/ready >/dev/null && break; sleep 1; done
+          if [ "$REDIS_MODE" = enabled ]; then REDIS_FLAG=--redis; else unset WORKFLOW_REDIS_URL; REDIS_FLAG=; fi
+          python benchmarks/run.py --workers "$WORKER_COUNT" --workload "$WORKLOAD" --sample-size 100 --repetitions 3 $REDIS_FLAG > "benchmark-${WORKER_COUNT}-${REDIS_MODE}-${WORKLOAD}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.workers }}-${{ matrix.redis }}-${{ matrix.workload }}
+          path: benchmark-*.json

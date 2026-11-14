@@ -1,0 +1,32 @@
+# Local development services only. Published ports are loopback-bound, and the
+# fixed credentials below must not be reused in a remote deployment.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: workflow
+      POSTGRES_USER: workflow
+      POSTGRES_PASSWORD: workflow
+    ports:
+      - "127.0.0.1:54329:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workflow -d workflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - workflow_pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    command: ["sh", "-c", "while true; do redis-server --save '' --appendonly no; sleep 1; done"]
+    ports:
+      - "127.0.0.1:56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  workflow_pgdata:

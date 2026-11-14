@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: workflow
+      POSTGRES_USER: workflow
+      POSTGRES_PASSWORD: chaos-only
+    ports:
+      - "127.0.0.1:${WORKFLOW_CHAOS_POSTGRES_PORT:?must be dynamically allocated by run-chaos.sh}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workflow -d workflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - chaos_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7
+    ports:
+      - "127.0.0.1:${WORKFLOW_CHAOS_REDIS_PORT:?must be dynamically allocated by run-chaos.sh}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  chaos_data:

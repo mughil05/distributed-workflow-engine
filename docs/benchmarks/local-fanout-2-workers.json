@@ -1,0 +1,54 @@
+{
+  "metadata": {
+    "git_commit": "129afadf9464b0576b6600772b86d108ae26ed3b",
+    "python": "3.12.4",
+    "postgresql": "16.16 (Debian 16.16-1.pgdg13+1)",
+    "redis": "7.4.12",
+    "os": "macOS-15.0-arm64-arm-64bit",
+    "cpu_count": 12,
+    "memory_bytes": 17179869184,
+    "workers": 2,
+    "redis_mode": "enabled"
+  },
+  "workload": "fan",
+  "workload_definition": {
+    "shape": "fan",
+    "requested_task_count": 8,
+    "first_task_delay_seconds": 0.02,
+    "shape_implementation": "benchmarks/run.py:shape"
+  },
+  "sample_size": 100,
+  "repetitions": 1,
+  "smoke_mode": false,
+  "classification": "local_measurement_p99_sample_eligible",
+  "methodology": "startup and one warm-up workflow excluded; during the timed interval the client polls only each workflow detail (one bounded request per workflow per 100ms cycle); submit-to-terminal is client-observed from submission start until the first poll that reports a terminal state, so it includes up to one polling interval plus API/DB request overhead; attempt histories and durable claim timestamps are collected only after all timed observations finish; attempt elapsed uses claimed_at to finished_at and includes orchestration overhead, not pure action time; p95 requires 20 samples and p99 requires 100; results are workload/client observation measurements, not a general system-throughput claim",
+  "results": [
+    {
+      "repetition": 1,
+      "workflows": 100,
+      "tasks": 800,
+      "workflow_outcomes": {
+        "succeeded": 100,
+        "failed": 0
+      },
+      "wall_seconds": 5.816893625073135,
+      "workflow_throughput_per_second": 17.191306296020276,
+      "task_throughput_per_second": 137.5304503681622,
+      "submit_to_terminal_client_observed_seconds": {
+        "p50": 5.185350417043082,
+        "p95": 5.547173542086966,
+        "p99": 5.586318208952434
+      },
+      "submit_to_first_claim_durable_timestamp_seconds": {
+        "p50": 0.859885,
+        "p95": 1.798757,
+        "p99": 1.963493
+      },
+      "attempt_elapsed_claimed_to_finished_not_action_time_seconds": {
+        "p50": 0.002513,
+        "p95": 0.027379,
+        "p99": 0.028881
+      }
+    }
+  ]
+}

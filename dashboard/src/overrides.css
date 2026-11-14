@@ -1,0 +1,6 @@
+.metrics-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+@media(max-width:950px){.metrics-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:620px){.metrics-grid{grid-template-columns:repeat(2,1fr)}}
+.failure-summary{margin-top:12px;padding:10px 12px;border-radius:7px;background:#fff0f1;color:#a43f4e;font-size:11px}
+.attempt-note{display:block;margin-top:8px;color:#91a0a4;font-size:9px}
+.load-more-attempts{margin:6px 0 2px}
