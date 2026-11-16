@@ -9,6 +9,16 @@ A portfolio project for durable DAG execution and distributed worker coordinatio
 
 Key features include validated DAGs, server-registered typed actions, an idempotent FastAPI submission API, a React dashboard with read-only DAG visualization, a transactional notification outbox, structured logs, Prometheus metrics, reproducible benchmarks, and isolated recovery tests. Delivery is at least once; external side effects are not exactly once. See the [runtime architecture diagram](#runtime-architecture-diagram) and detailed limitations below.
 
+## Worker crash recovery demo
+
+Run the focused real-process recovery demonstration with:
+
+```sh
+scripts/run-chaos.sh worker-recovery
+```
+
+Requires Docker Compose v2 and the project's Python dependencies. The runner starts PostgreSQL only in a uniquely named Compose project, then tears down that project's containers and volume on exit, including when the command fails or is interrupted. The test shows Worker A exiting abruptly inside its task action, its PostgreSQL lease expiring naturally, and Worker B reclaiming the task with a higher fencing token before completing the workflow. A successful run ends with `OK` and reports both workers' observed identities and fencing tokens. Task delivery is at least once: a crash after an external side effect but before its success checkpoint can cause that action to run again, so this demo does not establish exactly-once side effects.
+
 ## Quick local demo
 
 Requires Docker Compose v2. This demo is for a trusted local machine, binds published ports to loopback, and is not a hardened remote deployment:

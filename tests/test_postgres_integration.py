@@ -62,6 +62,34 @@ def _crash_during_action(dsn, workflow_id, action_started):
     PostgresWorker(store, lease_seconds=30, renewal_interval=5).run(workflow_id, {"only": action})
 
 
+def _crash_worker_during_action(dsn, workflow_id, action_entered):
+    store = PostgresStore(dsn, migrate=False)
+
+    def action():
+        action_entered.set()
+        os._exit(23)  # Abrupt process death before the success checkpoint.
+
+    PostgresWorker(store, lease_seconds=3, renewal_interval=0.5,
+                   worker_id="worker-a", poll_interval=0.02).run(
+        workflow_id, {"only": action})
+
+
+def _recover_with_worker_b(dsn, workflow_id, action_entered, result):
+    try:
+        store = PostgresStore(dsn, migrate=False)
+
+        def action():
+            action_entered.set()
+
+        state = PostgresWorker(store, lease_seconds=5, renewal_interval=1,
+                               worker_id="worker-b", poll_interval=0.02,
+                               fallback_scan_interval=0.1).run(
+            workflow_id, {"only": action})
+        result.put(("ok", state))
+    except BaseException as exc:
+        result.put(("error", type(exc).__name__, str(exc)))
+
+
 def _claim_once(dsn, workflow_id, worker_id, result):
     store = PostgresStore(dsn, migrate=False)
     result.put(store.claim_task(workflow_id, worker_id, 30))
@@ -501,6 +529,117 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                 ORDER BY attempt_number
             """, (self.workflow_id,)).fetchall()
         self.assertEqual([row[0] for row in outcomes], ["lease_expired", "running"])
+
+    def test_worker_process_crash_recovers_after_natural_lease_expiry(self):
+        self.initialize([Task("only", retry_policy=RetryPolicy(max_attempts=2))])
+        context = multiprocessing.get_context("spawn")
+        action_entered = context.Event()
+        worker_a = context.Process(target=_crash_worker_during_action,
+                                   args=(DSN, self.workflow_id, action_entered),
+                                   name="worker-a")
+        worker_b_action = context.Event()
+        worker_b_result = context.Queue()
+        worker_b = None
+
+        def stop_if_running(process):
+            if process is not None and process.is_alive():
+                process.terminate()
+                process.join(5)
+                if process.is_alive():
+                    process.kill()
+                    process.join(5)
+
+        try:
+            worker_a.start()
+            self.assertTrue(action_entered.wait(10),
+                            "Worker A did not claim the task and enter its action")
+            worker_a.join(10)
+            self.assertFalse(worker_a.is_alive(), "Worker A did not exit after its abrupt crash")
+            self.assertEqual(worker_a.exitcode, 23,
+                             "Worker A did not exit through the expected abrupt os._exit")
+
+            with self.store._connect() as conn:
+                first = conn.execute("""
+                    SELECT t.state,t.lease_owner,t.lease_expires_at,t.fencing_token,
+                           a.attempt_number,a.outcome,a.worker_id
+                    FROM tasks t JOIN task_attempts a USING (workflow_id,task_id)
+                    WHERE t.workflow_id=%s AND t.task_id='only'
+                """, (self.workflow_id,)).fetchone()
+            self.assertIsNotNone(first, "Worker A's lease was not recorded in PostgreSQL")
+            first_state, worker_a_id, deadline, first_token, first_attempt, first_outcome, attempt_a_id = first
+            self.assertEqual(first_state, "running")
+            self.assertIsNotNone(worker_a_id, "Worker A's lease owner was cleared after exit")
+            self.assertIsNotNone(deadline, "Worker A's lease deadline was not retained")
+            self.assertEqual(first_attempt, 1)
+            self.assertEqual(first_outcome, "running")
+            self.assertTrue(worker_a_id.startswith("worker-a:"), worker_a_id)
+            self.assertEqual(attempt_a_id, worker_a_id)
+            print(f"Worker A claimed task (worker={worker_a_id}, attempt=1, fence={first_token})",
+                  flush=True)
+            print("Worker A exited unexpectedly (os._exit status 23)", flush=True)
+
+            # Wait for PostgreSQL's own clock to pass its recorded deadline. Do not
+            # alter task state, lease data, retry timestamps, or attempt history.
+            expires = time.monotonic() + 10
+            expired = False
+            while time.monotonic() < expires:
+                with self.store._connect() as conn:
+                    expired = conn.execute("""
+                        SELECT lease_expires_at <= clock_timestamp()
+                        FROM tasks WHERE workflow_id=%s AND task_id='only'
+                    """, (self.workflow_id,)).fetchone()[0]
+                if expired:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(expired, "Worker A's PostgreSQL lease did not expire within 10 seconds")
+            print("Lease expired naturally according to PostgreSQL", flush=True)
+
+            worker_b = context.Process(target=_recover_with_worker_b,
+                                       args=(DSN, self.workflow_id, worker_b_action,
+                                             worker_b_result), name="worker-b")
+            worker_b.start()
+            self.assertTrue(worker_b_action.wait(10),
+                            "Worker B did not reclaim the task and enter its action")
+            worker_b.join(15)
+            self.assertFalse(worker_b.is_alive(), "Worker B did not finish within 15 seconds")
+            self.assertEqual(worker_b.exitcode, 0, "Worker B process failed")
+            try:
+                result = worker_b_result.get(timeout=2)
+            except queue.Empty:
+                self.fail("Worker B exited without reporting its workflow result")
+            self.assertEqual(result, ("ok", "succeeded"), f"Worker B failed: {result!r}")
+
+            with self.store._connect() as conn:
+                workflow_state = conn.execute(
+                    "SELECT state FROM workflows WHERE workflow_id=%s",
+                    (self.workflow_id,)).fetchone()[0]
+                task = conn.execute("""
+                    SELECT state,attempt_count,fencing_token,lease_owner
+                    FROM tasks WHERE workflow_id=%s AND task_id='only'
+                """, (self.workflow_id,)).fetchone()
+                attempts = conn.execute("""
+                    SELECT attempt_number,outcome,worker_id,fencing_token
+                    FROM task_attempts WHERE workflow_id=%s AND task_id='only'
+                    ORDER BY attempt_number
+                """, (self.workflow_id,)).fetchall()
+            self.assertEqual(workflow_state, "succeeded")
+            self.assertEqual(task[0:3], ("succeeded", 2, attempts[1][3]))
+            self.assertIsNone(task[3], "Completed task unexpectedly retains a lease owner")
+            self.assertEqual(len(attempts), 2)
+            second_attempt = attempts[1]
+            self.assertEqual((attempts[0][0], attempts[0][1]), (1, "lease_expired"))
+            self.assertEqual((second_attempt[0], second_attempt[1]), (2, "succeeded"))
+            self.assertEqual(attempts[0][2], worker_a_id)
+            self.assertTrue(second_attempt[2].startswith("worker-b:"), second_attempt[2])
+            self.assertGreater(second_attempt[3], first_token)
+            print(f"Worker B reclaimed task (worker={second_attempt[2]}, attempt=2, "
+                  f"fence={second_attempt[3]})", flush=True)
+            print("Attempt history and fencing verified; workflow succeeded", flush=True)
+        finally:
+            stop_if_running(worker_a)
+            stop_if_running(worker_b)
+            worker_b_result.cancel_join_thread()
+            worker_b_result.close()
 
     def test_crash_after_external_effect_repeats_action_at_least_once(self):
         self.initialize([Task("only", retry_policy=RetryPolicy(max_attempts=2))])
