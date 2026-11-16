@@ -4,7 +4,7 @@ Copyright © 2026 Mughil Vinayagam. All rights reserved.
 
 A portfolio project for durable DAG execution and distributed worker coordination. SQLite provides a lightweight local engine; PostgreSQL is authoritative for concurrent workers, leases, fencing, retries, attempt history, and workflow state. Redis is an optional wake-up channel, never a source of truth.
 
-> **At a glance:** Built a durable workflow engine with PostgreSQL-backed distributed workers, leases and fencing, retries, crash recovery, a FastAPI API, and a React DAG dashboard. The documented local verification includes **98 Python tests**, **3 service-recovery tests**, **10 dashboard tests**, and a Compose demo. Start with [Quick local demo](#quick-local-demo) or [Architecture](#architecture).
+> **At a glance:** Built a durable workflow engine with PostgreSQL-backed distributed workers, leases and fencing, retries, crash recovery, a FastAPI API, and a React DAG dashboard. The documented local verification includes **98 Python tests**, **3 service-recovery tests**, **10 dashboard tests**, and a Compose demo. Start with [Quick local demo](#quick-local-demo) or [Runtime architecture diagram](#runtime-architecture-diagram).
 
 
 Key features include validated DAGs, server-registered typed actions, an idempotent FastAPI submission API, a React dashboard with read-only DAG visualization, a transactional notification outbox, structured logs, Prometheus metrics, reproducible benchmarks, and isolated recovery tests. Delivery is at least once; external side effects are not exactly once. See the [runtime architecture diagram](#runtime-architecture-diagram) and detailed limitations below.
